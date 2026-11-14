@@ -140,6 +140,17 @@ describe('sanitizeHistory', () => {
 		expect(list).toHaveLength(6);
 	});
 
+	it('re-anchors currentId when the cut would strand it mid-chain', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const history = cyclicHistory();
+		history.currentId = 'u2';
+		sanitizeHistory(history);
+		warn.mockRestore();
+
+		expect(history.currentId).toBe('a3');
+		expect(createMessagesList(history, history.currentId)).toHaveLength(4);
+	});
+
 	it('leaves a well-formed chat untouched', () => {
 		const before = linearHistory();
 		const after = linearHistory();

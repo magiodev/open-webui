@@ -262,6 +262,7 @@ export const sanitizeHistory = (history) => {
 
 	// Break parentId cycles: one link per ring has to go, preferring the link that points
 	// at a newer message, which is the corrupted direction.
+	const cutIds: string[] = [];
 	for (const [id] of Object.entries(history.messages)) {
 		const chain: string[] = [];
 		const position: Record<string, number> = {};
@@ -283,12 +284,41 @@ export const sanitizeHistory = (history) => {
 				if (parent && Array.isArray(parent.childrenIds)) {
 					parent.childrenIds = parent.childrenIds.filter((childId: string) => childId !== cutId);
 				}
+				cutIds.push(cutId);
 				break;
 			}
 			position[currentId] = chain.length;
 			chain.push(currentId);
 			currentId = entry.parentId;
 		}
+	}
+
+	// A branch shown from a message that now sits mid-chain would hide the messages
+	// below it, so move currentId to the tip of the chain the cut opened up.
+	for (const cutId of cutIds) {
+		let node = history.currentId;
+		const seen = new Set();
+		let affected = false;
+		while (typeof node === 'string' && history.messages[node] && !seen.has(node)) {
+			if (node === cutId) {
+				affected = true;
+				break;
+			}
+			seen.add(node);
+			node = history.messages[node].parentId;
+		}
+		if (!affected) continue;
+		let tip = cutId;
+		const walked = new Set([cutId]);
+		let children: string[] = history.messages[cutId].childrenIds ?? [];
+		while (children.length !== 0) {
+			const child = children.at(-1);
+			if (child === undefined || walked.has(child) || !history.messages[child]) break;
+			walked.add(child);
+			tip = child;
+			children = history.messages[tip].childrenIds ?? [];
+		}
+		history.currentId = tip;
 	}
 
 	// Build reverse lookup: parent, indexed by child id
