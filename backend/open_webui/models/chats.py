@@ -575,6 +575,55 @@ class ChatTable:
         child_ids.append(child_id)
         return True
 
+    @staticmethod
+    def _repair_history_cycles(history: dict) -> bool:
+        # A parentId that points forward into the conversation loops every parent-chain walk,
+        # the browser render included, so drop one link per cycle.
+        messages = history.get('messages')
+        if not isinstance(messages, dict):
+            return False
+
+        def timestamp(message_id: str) -> float:
+            entry = messages.get(message_id) if isinstance(message_id, str) else None
+            value = entry.get('timestamp') if isinstance(entry, dict) else None
+            return value if isinstance(value, (int, float)) else 0
+
+        changed = False
+        acyclic = set()
+        for message_id in messages:
+            chain = []
+            position = {}
+            node = message_id
+            cyclic = False
+            while isinstance(node, str) and node not in acyclic:
+                entry = messages.get(node)
+                if not isinstance(entry, dict):
+                    break
+                if node in position:
+                    cycle = chain[position[node] :]
+                    # The corrupted link is the one pointing at a newer message; when timestamps
+                    # cannot tell them apart, cut the link that closes the ring.
+                    cut_id = cycle[-1]
+                    for child_id in cycle:
+                        if timestamp(child_id) < timestamp(messages[child_id].get('parentId')):
+                            cut_id = child_id
+                            break
+                    parent_id = messages[cut_id].get('parentId')
+                    messages[cut_id]['parentId'] = None
+                    parent = messages.get(parent_id)
+                    if isinstance(parent, dict) and isinstance(parent.get('childrenIds'), list):
+                        parent['childrenIds'] = [child_id for child_id in parent['childrenIds'] if child_id != cut_id]
+                    changed = True
+                    cyclic = True
+                    break
+                position[node] = len(chain)
+                chain.append(node)
+                parent_id = entry.get('parentId')
+                node = parent_id if isinstance(parent_id, str) else None
+            if not cyclic:
+                acyclic.update(position)
+        return changed
+
     def _repair_chat_current_id(self, chat: dict) -> bool:
         history = chat.get('history')
         if not isinstance(history, dict):
@@ -584,7 +633,7 @@ class ChatTable:
         if not isinstance(messages, dict):
             return False
 
-        changed = False
+        changed = self._repair_history_cycles(history)
         for message_id, message in messages.items():
             if not isinstance(message, dict):
                 continue
@@ -787,6 +836,10 @@ class ChatTable:
                 or (message['user'].get('id') if isinstance(message.get('user'), dict) else None)
                 or user_id
             )
+        history = chat.chat.get('history')
+        if isinstance(history, dict):
+            if self._repair_history_cycles(history):
+                log.info('Import: repaired cyclic chat history for user %s', user_id)
         return chat
 
     async def import_chats(

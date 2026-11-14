@@ -260,6 +260,37 @@ export const sanitizeHistory = (history) => {
 		if (!Array.isArray(message.childrenIds)) message.childrenIds = [];
 	}
 
+	// Break parentId cycles: one link per ring has to go, preferring the link that points
+	// at a newer message, which is the corrupted direction.
+	for (const [id] of Object.entries(history.messages)) {
+		const chain: string[] = [];
+		const position: Record<string, number> = {};
+		let currentId = id;
+		while (currentId) {
+			const entry = history.messages[currentId];
+			if (!entry) break;
+			if (position[currentId] !== undefined) {
+				const cycle = chain.slice(position[currentId]);
+				const stamp = (messageId: string) => history.messages[messageId]?.timestamp ?? 0;
+				const cutId =
+					cycle.find(
+						(childId: string) => stamp(childId) < stamp(history.messages[childId].parentId)
+					) ?? cycle[cycle.length - 1];
+				const parentId = history.messages[cutId].parentId;
+				console.warn('Circular dependency detected in message history', cutId);
+				history.messages[cutId].parentId = null;
+				const parent = history.messages[parentId];
+				if (parent && Array.isArray(parent.childrenIds)) {
+					parent.childrenIds = parent.childrenIds.filter((childId: string) => childId !== cutId);
+				}
+				break;
+			}
+			position[currentId] = chain.length;
+			chain.push(currentId);
+			currentId = entry.parentId;
+		}
+	}
+
 	// Build reverse lookup: parent, indexed by child id
 	const parentByChildId = {};
 	for (const [id, message] of Object.entries(history.messages)) {
@@ -1412,9 +1443,15 @@ export const getWeekday = () => {
 
 export const createMessagesList = (history, messageId) => {
 	const list = [];
+	const visitedMessageIds = new Set();
 	let currentId = messageId;
 
 	while (currentId !== null && currentId !== undefined) {
+		if (visitedMessageIds.has(currentId)) {
+			console.warn('Circular dependency detected in message history', currentId);
+			break;
+		}
+		visitedMessageIds.add(currentId);
 		const message = history.messages[currentId];
 		if (message === undefined) {
 			break;
