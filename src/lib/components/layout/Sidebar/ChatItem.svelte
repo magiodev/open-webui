@@ -558,7 +558,13 @@
 
 		if (!model && history?.messages && history?.currentId) {
 			let currentId = history.currentId;
+			const visitedMessageIds = new Set();
 			while (currentId) {
+				if (visitedMessageIds.has(currentId)) {
+					console.warn('Circular dependency detected in message history', currentId);
+					break;
+				}
+				visitedMessageIds.add(currentId);
 				const msg = history.messages[currentId];
 				if (!msg) break;
 				if (msg.role === 'assistant' && msg.model) {
